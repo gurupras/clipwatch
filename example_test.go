@@ -16,8 +16,8 @@ func Example() {
 	if err != nil {
 		log.Fatal(err) // no usable clipboard: no display, say
 	}
-	if w.Mechanism() == clipwatch.MechanismPoll && w.FallbackReason() != nil {
-		log.Printf("clipboard notifications unavailable, polling: %v", w.FallbackReason())
+	if w.FallbackReason() != nil {
+		log.Printf("clipboard notifications unavailable (%s): %v", w.Mechanism(), w.FallbackReason())
 	}
 
 	// An event says only that something changed; read what you need.

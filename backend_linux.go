@@ -17,7 +17,8 @@ var errWaylandSession = errors.New("clipwatch: Wayland session: X11 notification
 // backend is not written here yet, so a Wayland session defers to the
 // underlying library's watch.
 //
-// XFixes is skipped in a Wayland session even when XWayland provides DISPLAY.
+// XFixes is skipped in a Wayland session even when XWayland provides DISPLAY,
+// as GNOME's does (DISPLAY=:0 beside WAYLAND_DISPLAY=wayland-0).
 // The notification is not the problem: GNOME copies the Wayland selection into
 // XWayland, so XFixes does fire. The read that follows is: on GNOME, XWayland
 // does not hand the selection to an X11 client without a focused window, so an

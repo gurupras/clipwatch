@@ -18,7 +18,13 @@ Windows and X11 can simply say when the clipboard changed, and this listens:
 
 Where a backend cannot start, the watcher falls back to polling and says so
 through `Mechanism()`, with the reason in `FallbackReason()`. It is never worse
-than the library it wraps.
+than the library it wraps. `Mechanism()` is one of:
+
+- `event`: the OS wakes the watcher on every change.
+- `poll`: this package reads the platform's change counter on a timer
+  (macOS, or a fallback on Windows). The only mechanism `Hint()` speeds up.
+- `library`: watching is handed to `golang.design/x/clipboard` (Linux without
+  a usable X11 backend, including every Wayland session).
 
 ```go
 import "github.com/gurupras/clipwatch"
@@ -84,7 +90,7 @@ polling is all there is.
 |---|---|
 | Windows | Event-driven, in pure Go through `user32` |
 | Linux (X11) | Event-driven, XFixes over the X11 wire protocol |
-| Linux (Wayland) | Defers to the underlying library's watch, even under XWayland: on GNOME an XFixes event is followed by a read that returns nothing. `Mechanism()` reports `poll` because this package cannot tell which path the library took; `FallbackReason()` says why X11 was skipped. KDE and wlroots XWayland are untested |
+| Linux (Wayland) | Defers to the underlying library's watch, even under XWayland: on GNOME an XFixes event is followed by a read that returns nothing. `Mechanism()` reports `library`, and `FallbackReason()` says why X11 was skipped. KDE and wlroots XWayland are untested |
 | macOS | Polls `changeCount`, adaptively, because Apple offers nothing else |
 
 Verified by the unit tests everywhere; the on-device tests are how each backend

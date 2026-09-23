@@ -54,9 +54,15 @@ type Mechanism string
 const (
 	// MechanismEvent means the OS wakes us when the clipboard changes.
 	MechanismEvent Mechanism = "event"
-	// MechanismPoll means the OS offers no notification, or the event backend
-	// could not start, so a change counter is read on a timer.
+	// MechanismPoll means this package reads the platform's change counter on
+	// a timer, because the OS offers no notification (macOS) or the event
+	// backend could not start. Only this mechanism responds to Hint.
 	MechanismPoll Mechanism = "poll"
+	// MechanismLibrary means the platform has no change counter either, so
+	// watching is handed to golang.design/x/clipboard's own watch: event-driven
+	// on a Wayland compositor with data-control, a one-second content
+	// comparison otherwise. IdlePoll, ActivePoll and Hint have no effect on it.
+	MechanismLibrary Mechanism = "library"
 )
 
 // Event reports that the clipboard changed. It deliberately carries no data:
@@ -181,6 +187,9 @@ func newWatcher(ctx context.Context, o Options, start startFunc, counter func() 
 		// for FallbackReason, because this package does not log.
 		w.fallback = err
 	}
+	if !useCounter {
+		w.mech = MechanismLibrary
+	}
 	go w.poll(ctx, o)
 	return w
 }
@@ -200,8 +209,9 @@ func (w *Watcher) Mechanism() Mechanism { return w.mech }
 func (w *Watcher) FallbackReason() error { return w.fallback }
 
 // Hint tells a polling watcher that a copy is likely about to happen, so it
-// checks more often for Options.ActiveFor. It does nothing on an event backend,
-// which needs no help, and never blocks.
+// checks more often for Options.ActiveFor. It does nothing unless Mechanism is
+// MechanismPoll: an event backend needs no help, and the library's watch has
+// no interval to shorten. It never blocks.
 func (w *Watcher) Hint() error {
 	select {
 	case <-w.done:
@@ -239,9 +249,7 @@ func (w *Watcher) send(seq uint64) {
 // moves. It runs at IdlePoll until Hint, then at ActivePoll for ActiveFor.
 //
 // Where the platform has no counter (X11 and Wayland expose none), it hands
-// over to the underlying library's own watch. That is event-driven on a Wayland
-// compositor with data-control and otherwise reads and compares the content
-// once a second; a Hint speeds up neither.
+// over to the underlying library's own watch; see MechanismLibrary.
 func (w *Watcher) poll(ctx context.Context, o Options) {
 	if !w.useCounter {
 		w.watchViaLibrary(ctx)
