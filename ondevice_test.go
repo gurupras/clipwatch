@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -192,4 +195,82 @@ func TestOnDeviceHintSpeedsUpPolling(t *testing.T) {
 	if took > time.Second {
 		t.Errorf("a hinted copy took %v, want well under the 10s idle interval", took)
 	}
+}
+
+// TestOnDeviceReportsACopyFromAnotherProgram is the copy that matters: one made
+// by a different program, not by this process. Every other test here writes
+// through this package, so this process owns the clipboard it is watching; a
+// backend or a read path that only sees its own writes would pass them all.
+//
+// CLIPBOARD_ONDEVICE_COPY is a shell command that puts its stdin on the
+// clipboard, run with the test's environment:
+//
+//	Linux X11        xclip -selection clipboard
+//	Linux Wayland    env -u DISPLAY wl-copy   (KDE, wlroots; not GNOME, where
+//	                 wl-copy needs the data-control protocol GNOME lacks and
+//	                 never copies)
+//	macOS            pbcopy
+//	Windows          clip
+func TestOnDeviceReportsACopyFromAnotherProgram(t *testing.T) {
+	ondevice(t)
+	copier := os.Getenv("CLIPBOARD_ONDEVICE_COPY")
+	if copier == "" {
+		t.Skip("set CLIPBOARD_ONDEVICE_COPY to a command that copies its stdin, e.g. wl-copy")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w, err := New(ctx, Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Logf("mechanism %s, fallback reason: %v", w.Mechanism(), w.FallbackReason())
+	settle()
+
+	for i := 0; i < 3; i++ {
+		want := string(token(fmt.Sprintf("external-%d", i)))
+		// wl-copy and xclip leave a child behind to serve the clipboard. Given a
+		// pipe, that child would hold it open and Run would wait for it, so the
+		// copier's output goes to a file instead.
+		logPath := filepath.Join(t.TempDir(), "copier.log")
+		logFile, err := os.Create(logPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A copier that cannot copy may never exit (wl-copy on GNOME waits for
+		// a selection that never lands), so it gets a deadline of its own.
+		copyCtx, copyCancel := context.WithTimeout(ctx, 10*time.Second)
+		cmd := shell(copyCtx, copier)
+		cmd.Stdin = strings.NewReader(want)
+		cmd.Stdout, cmd.Stderr = logFile, logFile
+		start := time.Now()
+		err = cmd.Run()
+		copyCancel()
+		logFile.Close()
+		if err != nil {
+			out, _ := os.ReadFile(logPath)
+			t.Fatalf("%q: %v\n%s", copier, err, out)
+		}
+		select {
+		case _, ok := <-w.Events():
+			if !ok {
+				t.Fatal("the watcher stopped instead of reporting the copy")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("copy %d by %q was not reported within 5s", i+1, copier)
+		}
+		took := time.Since(start)
+		got := strings.TrimRight(string(Read(FmtText)), "\r\n")
+		t.Logf("copy %d by another program: reported %v after the copier started (%s)", i+1, took.Round(time.Millisecond), w.Mechanism())
+		if got != want {
+			t.Errorf("copy %d: the read after the event returned %q, want %q", i+1, got, want)
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+}
+
+func shell(ctx context.Context, command string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.CommandContext(ctx, "cmd", "/C", command)
+	}
+	return exec.CommandContext(ctx, "sh", "-c", command)
 }

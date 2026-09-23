@@ -84,6 +84,12 @@ quickly, that nothing is reported while nothing is copied, that the fifth copy
 is reported as well as the first, and that a hint speeds up polling where
 polling is all there is.
 
+Those tests copy from inside the test process. To check a copy made by another
+program, set `CLIPBOARD_ONDEVICE_COPY` to a command that copies its stdin:
+`xclip -selection clipboard` on X11, `clip` on Windows, `pbcopy` on macOS.
+GNOME on Wayland has no such command: `wl-copy` needs the data-control
+protocol, which GNOME lacks.
+
 ## Status
 
 | Platform | State |
