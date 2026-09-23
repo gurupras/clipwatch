@@ -35,10 +35,18 @@ func token(what string) []byte {
 	return []byte(fmt.Sprintf("clipboard-ondevice-%s-%d", what, time.Now().UnixNano()))
 }
 
-// wantEvent waits for one change, and says how long it took.
-func wantEvent(t *testing.T, w *Watcher, within time.Duration, what string) time.Duration {
+// settle gives a new watcher time to take its baseline. A write that lands
+// before a polling watcher's first read of the counter becomes that baseline
+// and is never reported, so every test waits before its first write.
+func settle() { time.Sleep(200 * time.Millisecond) }
+
+// copyAndWait writes data and waits for the watcher to report it. The time is
+// taken before Write: an event backend may queue its event before Write even
+// returns, and a stopwatch started afterwards would read that as zero.
+func copyAndWait(t *testing.T, w *Watcher, data []byte, within time.Duration, what string) time.Duration {
 	t.Helper()
 	start := time.Now()
+	Write(FmtText, data)
 	select {
 	case ev, ok := <-w.Events():
 		if !ok {
@@ -65,16 +73,18 @@ func TestOnDeviceMechanism(t *testing.T) {
 	}
 	t.Logf("%s: mechanism %s", runtime.GOOS, w.Mechanism())
 
-	// A Wayland session skips X11 on purpose (see backend_linux.go), so only a
-	// plain X11 session is expected to be event-driven on Linux.
-	wantEventDriven := runtime.GOOS == "windows" ||
-		(runtime.GOOS == "linux" && os.Getenv("DISPLAY") != "" && os.Getenv("WAYLAND_DISPLAY") == "")
+	want := MechanismEvent
 	switch {
-	case wantEventDriven && w.Mechanism() != MechanismEvent:
-		t.Errorf("this platform has clipboard notifications but the watcher fell back to %s: %v", w.Mechanism(), w.FallbackReason())
-	case runtime.GOOS == "darwin" && w.Mechanism() != MechanismPoll:
-		t.Errorf("macOS has no clipboard notification, so polling was expected, got %s", w.Mechanism())
+	case runtime.GOOS == "darwin":
+		want = MechanismPoll
+	case runtime.GOOS == "linux" && os.Getenv("WAYLAND_DISPLAY") != "":
+		// Skipped on purpose (see backend_linux.go), even with XWayland's DISPLAY.
+		want = MechanismLibrary
 	}
+	if w.Mechanism() != want {
+		t.Errorf("mechanism %s, want %s on this machine; fallback reason: %v", w.Mechanism(), want, w.FallbackReason())
+	}
+	t.Logf("fallback reason: %v", w.FallbackReason())
 }
 
 // TestOnDeviceReportsACopy is the core claim: put something on the clipboard,
@@ -87,13 +97,9 @@ func TestOnDeviceReportsACopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// Let the backend settle before the first write, so the copy under test is
-	// not lost in the setup.
-	time.Sleep(200 * time.Millisecond)
-
+	settle()
 	want := token("copy")
-	Write(FmtText, want)
-	took := wantEvent(t, w, 5*time.Second, "a copy")
+	took := copyAndWait(t, w, want, 5*time.Second, "a copy")
 	t.Logf("%s: a copy was reported in %v (%s)", runtime.GOOS, took.Round(time.Millisecond), w.Mechanism())
 
 	// The event says a change happened; the content is there to be read.
@@ -104,7 +110,7 @@ func TestOnDeviceReportsACopy(t *testing.T) {
 	// An event backend must be quick. Polling is bounded by its interval, so it
 	// is held to the default second plus slack rather than to the same bar.
 	limit := 500 * time.Millisecond
-	if w.Mechanism() == MechanismPoll {
+	if w.Mechanism() != MechanismEvent {
 		limit = 2 * time.Second
 	}
 	if took > limit {
@@ -124,13 +130,9 @@ func TestOnDeviceSaysNothingWhileNothingIsCopied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	Write(FmtText, token("quiet"))
-	// Drain the change just made, then expect silence.
-	select {
-	case <-w.Events():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the write was never reported, so this test cannot tell silence from deafness")
-	}
+	// First prove the watcher hears a copy, or silence would prove nothing.
+	settle()
+	copyAndWait(t, w, token("quiet"), 5*time.Second, "the copy before the silence")
 	select {
 	case ev := <-w.Events():
 		t.Errorf("a change was reported though nothing was copied: %+v", ev)
@@ -149,10 +151,9 @@ func TestOnDeviceRepeatedCopies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	time.Sleep(200 * time.Millisecond)
+	settle()
 	for i := 0; i < 5; i++ {
-		Write(FmtText, token(fmt.Sprintf("repeat-%d", i)))
-		took := wantEvent(t, w, 5*time.Second, fmt.Sprintf("copy %d", i+1))
+		took := copyAndWait(t, w, token(fmt.Sprintf("repeat-%d", i)), 5*time.Second, fmt.Sprintf("copy %d", i+1))
 		t.Logf("copy %d reported in %v", i+1, took.Round(time.Millisecond))
 		// A copy that lands while the previous event is still unread would be
 		// collapsed into it, which is correct but would not prove anything, so
@@ -163,8 +164,10 @@ func TestOnDeviceRepeatedCopies(t *testing.T) {
 
 // TestOnDeviceHintSpeedsUpPolling is macOS's version of the promise: no
 // notification exists, so a caller that knows a copy is coming asks for a
-// faster interval and gets it. Elsewhere the backend is event-driven and the
-// hint is a no-op, so the test only runs where polling is the mechanism.
+// faster interval and gets it. It runs only where this package's own poll is
+// the mechanism: an event backend has nothing to speed up, and the library's
+// watch (MechanismLibrary) ignores hints, so a fast result there would be the
+// library's own interval, not the hint.
 func TestOnDeviceHintSpeedsUpPolling(t *testing.T) {
 	ondevice(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -178,15 +181,14 @@ func TestOnDeviceHintSpeedsUpPolling(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	if w.Mechanism() != MechanismPoll {
-		t.Skipf("this machine is event-driven (%s); a hint has nothing to speed up", w.Mechanism())
+		t.Skipf("mechanism is %s; only %s responds to a hint", w.Mechanism(), MechanismPoll)
 	}
-	time.Sleep(200 * time.Millisecond)
+	settle()
 	if err := w.Hint(); err != nil {
 		t.Fatalf("Hint: %v", err)
 	}
-	Write(FmtText, token("hint"))
-	took := wantEvent(t, w, 3*time.Second, "a hinted copy")
-	t.Logf("darwin: a hinted copy was reported in %v", took.Round(time.Millisecond))
+	took := copyAndWait(t, w, token("hint"), 3*time.Second, "a hinted copy")
+	t.Logf("%s: a hinted copy was reported in %v", runtime.GOOS, took.Round(time.Millisecond))
 	if took > time.Second {
 		t.Errorf("a hinted copy took %v, want well under the 10s idle interval", took)
 	}
