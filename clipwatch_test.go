@@ -2,6 +2,7 @@ package clipwatch
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,17 +36,7 @@ func (f *fakeCounter) waitForBaseline(t *testing.T) {
 // macOS, neither of which a test machine is owed.
 func newTestWatcher(t *testing.T, ctx context.Context, f *fakeCounter, o Options) *Watcher {
 	t.Helper()
-	o = o.withDefaults()
-	w := &Watcher{
-		events:      make(chan Event, 1),
-		hint:        make(chan struct{}, 1),
-		done:        ctx.Done(),
-		mech:        MechanismPoll,
-		readCounter: f.read,
-		useCounter:  true,
-	}
-	go w.poll(ctx, o)
-	return w
+	return newWatcher(ctx, o, nil, f.read, true)
 }
 
 func TestAChangeInTheCounterIsReported(t *testing.T) {
@@ -184,5 +175,117 @@ func TestDefaultsAreFilledIn(t *testing.T) {
 	kept := Options{IdlePoll: time.Minute, ActivePoll: time.Second, ActiveFor: time.Hour}
 	if got := kept.withDefaults(); got != kept {
 		t.Errorf("withDefaults changed what the caller set: %+v", got)
+	}
+}
+
+// Hints arriving faster than ActivePoll must not keep pushing the next check
+// back: a caller that hints on every keystroke still gets its copy noticed.
+func TestRepeatedHintsDoNotPostponeTheCheck(t *testing.T) {
+	f := &fakeCounter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := newTestWatcher(t, ctx, f, Options{
+		IdlePoll:   30 * time.Second,
+		ActivePoll: 50 * time.Millisecond,
+		ActiveFor:  5 * time.Second,
+	})
+	f.waitForBaseline(t)
+	f.n.Add(1)
+
+	stopHinting := make(chan struct{})
+	defer close(stopHinting)
+	go func() {
+		for {
+			select {
+			case <-stopHinting:
+				return
+			case <-time.After(5 * time.Millisecond):
+				w.Hint()
+			}
+		}
+	}()
+	select {
+	case <-w.Events():
+	case <-time.After(2 * time.Second):
+		t.Fatal("a stream of hints postponed the check indefinitely")
+	}
+}
+
+// A Hint burst ends: after ActiveFor the watcher is back to the idle interval,
+// rather than quietly polling fast for the rest of its life.
+func TestAHintBurstEnds(t *testing.T) {
+	f := &fakeCounter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := newTestWatcher(t, ctx, f, Options{
+		IdlePoll:   30 * time.Second,
+		ActivePoll: 5 * time.Millisecond,
+		ActiveFor:  50 * time.Millisecond,
+	})
+	f.waitForBaseline(t)
+	w.Hint()
+
+	time.Sleep(150 * time.Millisecond) // the burst and a margin
+	after := f.reads.Load()
+	time.Sleep(150 * time.Millisecond)
+	if n := f.reads.Load() - after; n > 0 {
+		t.Errorf("the counter was read %d more times after the burst should have ended", n)
+	}
+}
+
+// An event backend that cannot start leaves a working polling watcher, and the
+// reason is kept for the caller rather than logged or lost.
+func TestAFailedBackendFallsBackToPolling(t *testing.T) {
+	f := &fakeCounter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	refused := errors.New("no XFIXES")
+	w := newWatcher(ctx, Options{IdlePoll: 10 * time.Millisecond},
+		func(context.Context, *Watcher) error { return refused }, f.read, true)
+
+	if w.Mechanism() != MechanismPoll {
+		t.Errorf("mechanism %s after the backend failed, want poll", w.Mechanism())
+	}
+	if !errors.Is(w.FallbackReason(), refused) {
+		t.Errorf("FallbackReason() = %v, want %v", w.FallbackReason(), refused)
+	}
+	f.waitForBaseline(t)
+	f.n.Add(1)
+	select {
+	case _, ok := <-w.Events():
+		if !ok {
+			t.Fatal("Events closed instead of falling back")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the polling fallback never reported the change")
+	}
+}
+
+// A backend that starts is the only source of events: nothing polls beside it.
+func TestARunningBackendIsNotPolledBeside(t *testing.T) {
+	f := &fakeCounter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := newWatcher(ctx, Options{IdlePoll: time.Millisecond},
+		func(context.Context, *Watcher) error { return nil }, f.read, true)
+
+	if w.Mechanism() != MechanismEvent || w.FallbackReason() != nil {
+		t.Errorf("mechanism %s, fallback %v; want event, nil", w.Mechanism(), w.FallbackReason())
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := f.reads.Load(); n != 0 {
+		t.Errorf("the counter was read %d times beside a running event backend", n)
+	}
+}
+
+func TestForcePollSkipsTheBackend(t *testing.T) {
+	f := &fakeCounter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := false
+	w := newWatcher(ctx, Options{ForcePoll: true},
+		func(context.Context, *Watcher) error { started = true; return nil }, f.read, true)
+	if started || w.Mechanism() != MechanismPoll || w.FallbackReason() != nil {
+		t.Errorf("ForcePoll: backend started %v, mechanism %s, fallback %v", started, w.Mechanism(), w.FallbackReason())
 	}
 }

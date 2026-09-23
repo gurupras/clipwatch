@@ -69,7 +69,7 @@ func TestOnDeviceMechanism(t *testing.T) {
 		(runtime.GOOS == "linux" && os.Getenv("DISPLAY") != "")
 	switch {
 	case wantEventDriven && w.Mechanism() != MechanismEvent:
-		t.Errorf("this platform has clipboard notifications but the watcher fell back to %s", w.Mechanism())
+		t.Errorf("this platform has clipboard notifications but the watcher fell back to %s: %v", w.Mechanism(), w.FallbackReason())
 	case runtime.GOOS == "darwin" && w.Mechanism() != MechanismPoll:
 		t.Errorf("macOS has no clipboard notification, so polling was expected, got %s", w.Mechanism())
 	}

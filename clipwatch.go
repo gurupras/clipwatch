@@ -4,20 +4,23 @@
 // Reading and writing are golang.design/x/clipboard's, unchanged: this package
 // adds only the watching. That library polls on every platform — a one-second
 // ticker comparing a change counter — so a copy waits half a second on average
-// and a second at worst before the other side hears about it. Three of the four
-// desktop platforms can say when the clipboard changed:
+// and a second at worst before the other side hears about it. Where the
+// platform can say when the clipboard changed, this listens instead:
 //
-//	Windows       a message-only window on the clipboard format listener list,
-//	              woken by WM_CLIPBOARDUPDATE
-//	Linux (X11)   XFixes, which reports a new owner of the CLIPBOARD selection
-//	Linux (Wayland) the data-control protocol, where the compositor has it
-//	macOS         nothing: NSPasteboard offers changeCount and no notification,
-//	              so this polls, but adapts (see Options.ActivePoll)
+//	Windows         a message-only window on the clipboard format listener
+//	                list, woken by WM_CLIPBOARDUPDATE
+//	Linux (X11)     XFixes, which reports a new owner of the CLIPBOARD selection
+//	Linux (Wayland) not yet here: this defers to the underlying library, whose
+//	                watch uses data-control where the compositor offers it
+//	                and polls where it does not (GNOME)
+//	macOS           nothing: NSPasteboard offers changeCount and no
+//	                notification, so this polls, but adapts (see
+//	                Options.ActivePoll)
 //
-// Where a backend cannot start — an X server without XFixes, a compositor
-// without data-control, a locked-down Windows session — the watcher falls back
-// to polling and says so through Watcher.Mechanism. It is therefore never worse
-// than the library it wraps.
+// Where a backend cannot start — an X server without XFixes, a Wayland
+// session, a locked-down Windows session — the watcher falls back to polling
+// and says so through Watcher.Mechanism. It is therefore never worse than the
+// library it wraps.
 //
 // Events carry no clipboard content. What was copied is read only when the
 // caller asks, through Read, so a program that only wants to know "something
@@ -27,6 +30,7 @@ package clipwatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	xclip "golang.design/x/clipboard"
@@ -121,10 +125,11 @@ func Write(f Format, data []byte) <-chan struct{} { return xclip.Write(f, data) 
 
 // Watcher reports clipboard changes until its context ends.
 type Watcher struct {
-	events chan Event
-	hint   chan struct{}
-	mech   Mechanism
-	done   <-chan struct{}
+	events   chan Event
+	hint     chan struct{}
+	mech     Mechanism
+	fallback error
+	done     <-chan struct{}
 
 	// The platform's change counter, per watcher rather than package-wide so a
 	// test can drive the polling logic on any machine without racing another
@@ -132,6 +137,11 @@ type Watcher struct {
 	readCounter func() uint64
 	useCounter  bool
 }
+
+// startFunc starts an event backend. On success the backend owns w.events and
+// closes it when it stops; on failure it must not have touched w.events,
+// because the polling fallback takes it over.
+type startFunc func(ctx context.Context, w *Watcher) error
 
 // New starts watching. The watcher stops when ctx ends, and Events is closed
 // after the last event, so a range over it terminates.
@@ -142,31 +152,37 @@ type Watcher struct {
 // neither watching nor reading can work.
 func New(ctx context.Context, o Options) (*Watcher, error) {
 	if err := xclip.Init(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("clipwatch: the clipboard is unavailable: %w", err)
 	}
+	return newWatcher(ctx, o, eventBackend(), changeCount, hasChangeCounter), nil
+}
+
+// newWatcher is New without the platform: tests pass their own backend and
+// counter, so every path through it runs on any machine.
+func newWatcher(ctx context.Context, o Options, start startFunc, counter func() uint64, useCounter bool) *Watcher {
 	o = o.withDefaults()
 	w := &Watcher{
 		// One in flight is enough: an event says only "something changed", so a
 		// caller that is behind wants the newest, not a queue of duplicates.
 		events:      make(chan Event, 1),
 		hint:        make(chan struct{}, 1),
+		mech:        MechanismPoll,
 		done:        ctx.Done(),
-		readCounter: changeCount,
-		useCounter:  hasChangeCounter,
+		readCounter: counter,
+		useCounter:  useCounter,
 	}
-	w.mech = MechanismPoll
-	if !o.ForcePoll {
-		if start, ok := eventBackend(); ok {
-			if err := start(ctx, w, o); err == nil {
-				w.mech = MechanismEvent
-				return w, nil
-			}
-			// A backend that cannot start is not an error the caller can act
-			// on: polling still works, and Mechanism says which ran.
+	if start != nil && !o.ForcePoll {
+		err := start(ctx, w)
+		if err == nil {
+			w.mech = MechanismEvent
+			return w
 		}
+		// Not an error the caller can act on: polling still works. It is kept
+		// for FallbackReason, because this package does not log.
+		w.fallback = err
 	}
 	go w.poll(ctx, o)
-	return w, nil
+	return w
 }
 
 // Events yields one value per clipboard change. It is closed when the watcher
@@ -176,6 +192,12 @@ func (w *Watcher) Events() <-chan Event { return w.events }
 
 // Mechanism says whether this watcher is woken by the OS or polls.
 func (w *Watcher) Mechanism() Mechanism { return w.mech }
+
+// FallbackReason says why the platform's event backend could not start — no
+// XFIXES on this X server, say — so a caller can report why it is polling
+// where it expected events. It is nil when the event backend is running, when
+// the platform has none (macOS), and when Options.ForcePoll was set.
+func (w *Watcher) FallbackReason() error { return w.fallback }
 
 // Hint tells a polling watcher that a copy is likely about to happen, so it
 // checks more often for Options.ActiveFor. It does nothing on an event backend,
@@ -216,9 +238,10 @@ func (w *Watcher) send(seq uint64) {
 // change counter — an integer, not the clipboard's content — and report when it
 // moves. It runs at IdlePoll until Hint, then at ActivePoll for ActiveFor.
 //
-// Where the platform has no counter (X11 and Wayland expose no such thing), it
-// hands over to the underlying library's own watch, which compares the content
-// it reads. That path cannot be sped up by a Hint, and says so.
+// Where the platform has no counter (X11 and Wayland expose none), it hands
+// over to the underlying library's own watch. That is event-driven on a Wayland
+// compositor with data-control and otherwise reads and compares the content
+// once a second; a Hint speeds up neither.
 func (w *Watcher) poll(ctx context.Context, o Options) {
 	if !w.useCounter {
 		w.watchViaLibrary(ctx)
@@ -227,64 +250,47 @@ func (w *Watcher) poll(ctx context.Context, o Options) {
 	defer close(w.events)
 	last := w.readCounter()
 	var seq uint64
-	interval := o.IdlePoll
-	var burstUntil time.Time
-	t := time.NewTimer(interval)
+	var burstUntil time.Time // zero while idle
+	t := time.NewTimer(o.IdlePoll)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-w.hint:
-			burstUntil = time.Now().Add(o.ActiveFor)
-			interval = o.ActivePoll
-			if !t.Stop() {
-				select {
-				case <-t.C:
-				default:
-				}
+			// Only the first hint of a burst moves the timer. Resetting it on
+			// every hint would let a caller that hints more often than
+			// ActivePoll postpone the next check indefinitely.
+			if burstUntil.IsZero() {
+				t.Reset(o.ActivePoll)
 			}
-		case <-t.C:
+			burstUntil = time.Now().Add(o.ActiveFor)
+		case now := <-t.C:
 			if cur := w.readCounter(); cur != last {
 				last = cur
 				seq++
 				w.send(seq)
 			}
-			if !burstUntil.IsZero() && time.Now().After(burstUntil) {
+			if !burstUntil.IsZero() && now.After(burstUntil) {
 				burstUntil = time.Time{}
-				interval = o.IdlePoll
+			}
+			if burstUntil.IsZero() {
+				t.Reset(o.IdlePoll)
+			} else {
+				t.Reset(o.ActivePoll)
 			}
 		}
-		t.Reset(interval)
 	}
 }
 
 // watchViaLibrary forwards golang.design/x/clipboard's own watch, for platforms
-// with no change counter to poll. Both formats are watched, because a caller
-// asking "did the clipboard change" means either.
+// with no change counter to poll. It watches text and images both, because a
+// caller asking "did the clipboard change" means either.
 func (w *Watcher) watchViaLibrary(ctx context.Context) {
 	defer close(w.events)
-	text := xclip.Watch(ctx, FmtText)
-	image := xclip.Watch(ctx, FmtImage)
 	var seq uint64
-	for text != nil || image != nil {
-		select {
-		case <-ctx.Done():
-			return
-		case _, ok := <-text:
-			if !ok {
-				text = nil
-				continue
-			}
-			seq++
-			w.send(seq)
-		case _, ok := <-image:
-			if !ok {
-				image = nil
-				continue
-			}
-			seq++
-			w.send(seq)
-		}
+	for range xclip.Watch(ctx) {
+		seq++
+		w.send(seq)
 	}
 }

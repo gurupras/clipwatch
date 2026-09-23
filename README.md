@@ -6,18 +6,19 @@ a second later.
 `golang.design/x/clipboard` reads and writes the clipboard on every platform,
 and this package uses it for exactly that. What it adds is the watching. The
 underlying library polls — a one-second ticker comparing a change counter — so
-a copy waits half a second on average before anything else learns of it. Three
-of the four desktop platforms can simply say when the clipboard changed:
+a copy waits half a second on average before anything else learns of it.
+Windows and X11 can simply say when the clipboard changed, and this listens:
 
 | Platform | How a change is noticed | Latency |
 |---|---|---|
 | Windows | A message-only window on the clipboard format listener list, woken by `WM_CLIPBOARDUPDATE` | immediate |
 | Linux (X11) | XFixes reports a new owner of the CLIPBOARD selection | immediate |
-| Linux (Wayland) | The data-control protocol, where the compositor offers it | immediate |
+| Linux (Wayland) | Not yet here: defers to the underlying library, whose watch uses data-control where the compositor offers it (wlroots, KDE) and polls where it does not (GNOME) | immediate, or up to 1 s |
 | macOS | Polling `NSPasteboard.changeCount` — Apple publishes no notification | 100 ms–1 s, see *Hints* |
 
 Where a backend cannot start, the watcher falls back to polling and says so
-through `Mechanism()`. It is never worse than the library it wraps.
+through `Mechanism()`, with the reason in `FallbackReason()`. It is never worse
+than the library it wraps.
 
 ```go
 import "github.com/gurupras/clipwatch"
@@ -83,7 +84,7 @@ polling is all there is.
 |---|---|
 | Windows | Event-driven, in pure Go through `user32` |
 | Linux (X11) | Event-driven, XFixes over the X11 wire protocol |
-| Linux (Wayland) | Falls back to polling; the data-control backend is not written |
+| Linux (Wayland) | Defers to the underlying library's watch; `Mechanism()` reports `poll` because this package cannot tell which path the library took |
 | macOS | Polls `changeCount`, adaptively, because Apple offers nothing else |
 
 Verified by the unit tests everywhere; the on-device tests are how each backend
