@@ -1,6 +1,8 @@
 package clipwatch
 
 import (
+	"sync"
+
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 )
@@ -9,10 +11,11 @@ import (
 // changeCount, an integer that rises on every write by any program, and that is
 // all Apple offers. Reading it is one message send to the pasteboard server,
 // far cheaper than reading the pasteboard itself, so the watcher polls this and
-// reads content only when it moves.
+// never reads content to decide whether anything changed.
 const hasChangeCounter = true
 
 var (
+	appKitOnce           sync.Once
 	classPasteboard      objc.Class
 	classAutoreleasePool objc.Class
 	selGeneralPasteboard = objc.RegisterName("generalPasteboard")
@@ -22,8 +25,10 @@ var (
 	selDrain             = objc.RegisterName("drain")
 )
 
-func init() {
-	// A program that only watches the clipboard may not have AppKit loaded.
+// A program that only watches the clipboard may not have AppKit loaded. It is
+// loaded on the first poll rather than at package init, so importing this
+// package costs nothing until a watcher runs.
+func loadAppKit() {
 	_, _ = purego.Dlopen("/System/Library/Frameworks/AppKit.framework/AppKit",
 		purego.RTLD_LAZY|purego.RTLD_GLOBAL)
 	classPasteboard = objc.GetClass("NSPasteboard")
@@ -33,6 +38,7 @@ func init() {
 // changeCount returns NSPasteboard's counter, or 0 if AppKit is unavailable —
 // in which case the watcher reports no changes rather than false ones.
 func changeCount() uint64 {
+	appKitOnce.Do(loadAppKit)
 	if classPasteboard == 0 {
 		return 0
 	}
