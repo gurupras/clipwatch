@@ -84,7 +84,7 @@ polling is all there is.
 |---|---|
 | Windows | Event-driven, in pure Go through `user32` |
 | Linux (X11) | Event-driven, XFixes over the X11 wire protocol |
-| Linux (Wayland) | Defers to the underlying library's watch; `Mechanism()` reports `poll` because this package cannot tell which path the library took |
+| Linux (Wayland) | Defers to the underlying library's watch, even under XWayland: on GNOME an XFixes event is followed by a read that returns nothing. `Mechanism()` reports `poll` because this package cannot tell which path the library took; `FallbackReason()` says why X11 was skipped. KDE and wlroots XWayland are untested |
 | macOS | Polls `changeCount`, adaptively, because Apple offers nothing else |
 
 Verified by the unit tests everywhere; the on-device tests are how each backend

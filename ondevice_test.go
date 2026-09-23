@@ -65,8 +65,10 @@ func TestOnDeviceMechanism(t *testing.T) {
 	}
 	t.Logf("%s: mechanism %s", runtime.GOOS, w.Mechanism())
 
+	// A Wayland session skips X11 on purpose (see backend_linux.go), so only a
+	// plain X11 session is expected to be event-driven on Linux.
 	wantEventDriven := runtime.GOOS == "windows" ||
-		(runtime.GOOS == "linux" && os.Getenv("DISPLAY") != "")
+		(runtime.GOOS == "linux" && os.Getenv("DISPLAY") != "" && os.Getenv("WAYLAND_DISPLAY") == "")
 	switch {
 	case wantEventDriven && w.Mechanism() != MechanismEvent:
 		t.Errorf("this platform has clipboard notifications but the watcher fell back to %s: %v", w.Mechanism(), w.FallbackReason())
