@@ -2,25 +2,25 @@
 // moment one happens, instead of asking once a second whether anything has.
 //
 // Reading and writing are golang.design/x/clipboard's, unchanged: this package
-// adds only the watching. That library polls on every platform — a one-second
-// ticker comparing a change counter — so a copy waits half a second on average
-// and a second at worst before the other side hears about it. Where the
-// platform can say when the clipboard changed, this listens instead:
+// adds only the watching. That library polls on Windows, macOS and X11 — a
+// one-second ticker comparing a change counter — so a copy waits half a second
+// on average and a second at worst before the other side hears about it. Where
+// the platform can say when the clipboard changed, this listens instead:
 //
 //	Windows         a message-only window on the clipboard format listener
 //	                list, woken by WM_CLIPBOARDUPDATE
 //	Linux (X11)     XFixes, which reports a new owner of the CLIPBOARD selection
-//	Linux (Wayland) not yet here: this defers to the underlying library, whose
-//	                watch uses data-control where the compositor offers it
-//	                and polls where it does not (GNOME)
+//	Linux (Wayland) the underlying library's watch, through data-control where
+//	                the compositor offers it (wlroots, KDE); GNOME has none
+//	                and is not supported, see ErrGNOMEWayland
 //	macOS           nothing: NSPasteboard offers changeCount and no
 //	                notification, so this polls, but adapts (see
 //	                Options.ActivePoll)
 //
 // Where a backend cannot start — an X server without XFixes, a Wayland
-// session, a locked-down Windows session — the watcher falls back to polling
-// and says so through Watcher.Mechanism. It is therefore never worse than the
-// library it wraps.
+// session, a locked-down Windows session — the watcher falls back and says so
+// through Watcher.Mechanism, with the reason in Watcher.FallbackReason. It is
+// therefore never worse than the library it wraps.
 //
 // Events carry no clipboard content. What was copied is read only when the
 // caller asks, through Read, so a program that only wants to know "something
@@ -115,6 +115,15 @@ func (o Options) withDefaults() Options {
 
 // ErrClosed is returned by Hint on a watcher whose context has ended.
 var ErrClosed = errors.New("clipwatch: the watcher is closed")
+
+// ErrGNOMEWayland is the FallbackReason in a GNOME Wayland session, where
+// clipboard changes cannot be watched reliably: GNOME has no data-control, and
+// the X11 view of the clipboard that remains shows only the first Wayland copy
+// after an X11 one. The watcher still runs, but it misses copies and a Read
+// may return an earlier copy. A program that needs the clipboard there must
+// use the desktop portal's clipboard (org.freedesktop.portal.Clipboard, in a
+// RemoteDesktop session). Test for it with errors.Is.
+var ErrGNOMEWayland = errors.New("clipwatch: GNOME Wayland: the clipboard cannot be watched reliably here; consecutive Wayland copies are not seen, and reads may be stale; use the desktop portal")
 
 // Init prepares the underlying clipboard library. It is not required — New
 // calls it — but a caller that wants to fail early, before any goroutine

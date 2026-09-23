@@ -289,3 +289,20 @@ func TestForcePollSkipsTheBackend(t *testing.T) {
 		t.Errorf("ForcePoll: backend started %v, mechanism %s, fallback %v", started, w.Mechanism(), w.FallbackReason())
 	}
 }
+
+func TestIsGNOMEReadsTheDesktopList(t *testing.T) {
+	for desktop, want := range map[string]bool{
+		"GNOME":                 true,
+		"ubuntu:GNOME":          true,
+		"gnome":                 true,
+		"KDE":                   false,
+		"sway":                  false,
+		"GNOME-Flashback:Unity": false,
+		"":                      false,
+	} {
+		t.Setenv("XDG_CURRENT_DESKTOP", desktop)
+		if got := isGNOME(); got != want {
+			t.Errorf("XDG_CURRENT_DESKTOP=%q: isGNOME() = %v, want %v", desktop, got, want)
+		}
+	}
+}

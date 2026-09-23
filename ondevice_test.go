@@ -2,6 +2,7 @@ package clipwatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -86,6 +87,10 @@ func TestOnDeviceMechanism(t *testing.T) {
 	}
 	if w.Mechanism() != want {
 		t.Errorf("mechanism %s, want %s on this machine; fallback reason: %v", w.Mechanism(), want, w.FallbackReason())
+	}
+	if runtime.GOOS == "linux" && os.Getenv("WAYLAND_DISPLAY") != "" && isGNOME() &&
+		!errors.Is(w.FallbackReason(), ErrGNOMEWayland) {
+		t.Errorf("GNOME Wayland must be reported as ErrGNOMEWayland, got %v", w.FallbackReason())
 	}
 	t.Logf("fallback reason: %v", w.FallbackReason())
 }
@@ -206,9 +211,9 @@ func TestOnDeviceHintSpeedsUpPolling(t *testing.T) {
 // clipboard, run with the test's environment:
 //
 //	Linux X11        xclip -selection clipboard
-//	Linux Wayland    env -u DISPLAY wl-copy   (KDE, wlroots; not GNOME, where
-//	                 wl-copy needs the data-control protocol GNOME lacks and
-//	                 never copies)
+//	Linux Wayland    env -u DISPLAY wl-copy   (KDE, wlroots)
+//	GNOME on Xorg    GDK_BACKEND=x11 python3 scripts/gtk-copy.py
+//	GNOME Wayland    not supported; the test skips (see ErrGNOMEWayland)
 //	macOS            pbcopy
 //	Windows          clip
 func TestOnDeviceReportsACopyFromAnotherProgram(t *testing.T) {
@@ -224,6 +229,10 @@ func TestOnDeviceReportsACopyFromAnotherProgram(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Logf("mechanism %s, fallback reason: %v", w.Mechanism(), w.FallbackReason())
+	if errors.Is(w.FallbackReason(), ErrGNOMEWayland) {
+		// Measured: the first Wayland copy is seen, the second never is.
+		t.Skip("GNOME Wayland is not supported: consecutive Wayland copies are not seen (ErrGNOMEWayland)")
+	}
 	settle()
 
 	for i := 0; i < 3; i++ {

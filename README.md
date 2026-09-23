@@ -5,15 +5,17 @@ a second later.
 
 `golang.design/x/clipboard` reads and writes the clipboard on every platform,
 and this package uses it for exactly that. What it adds is the watching. The
-underlying library polls — a one-second ticker comparing a change counter — so
-a copy waits half a second on average before anything else learns of it.
-Windows and X11 can simply say when the clipboard changed, and this listens:
+underlying library polls on Windows, macOS and X11 — a one-second ticker
+comparing a change counter — so a copy waits half a second on average before
+anything else learns of it. Where the platform can say when the clipboard
+changed, this listens:
 
 | Platform | How a change is noticed | Latency |
 |---|---|---|
 | Windows | A message-only window on the clipboard format listener list, woken by `WM_CLIPBOARDUPDATE` | immediate |
 | Linux (X11) | XFixes reports a new owner of the CLIPBOARD selection | immediate |
-| Linux (Wayland) | Not yet here: defers to the underlying library, whose watch uses data-control where the compositor offers it (wlroots, KDE) and polls where it does not (GNOME) | immediate, or up to 1 s |
+| Linux (Wayland, wlroots/KDE) | The underlying library's watch, through the data-control protocol | immediate |
+| Linux (Wayland, GNOME) | **Not supported**, see below | — |
 | macOS | Polling `NSPasteboard.changeCount` — Apple publishes no notification | 100 ms–1 s, see *Hints* |
 
 Where a backend cannot start, the watcher falls back to polling and says so
@@ -23,8 +25,25 @@ than the library it wraps. `Mechanism()` is one of:
 - `event`: the OS wakes the watcher on every change.
 - `poll`: this package reads the platform's change counter on a timer
   (macOS, or a fallback on Windows). The only mechanism `Hint()` speeds up.
-- `library`: watching is handed to `golang.design/x/clipboard` (Linux without
-  a usable X11 backend, including every Wayland session).
+- `library`: watching is handed to `golang.design/x/clipboard` (every Wayland
+  session, or Linux without a usable X11 backend). With data-control, as on
+  wlroots, that is event-driven too; without it, the library reads and compares
+  the content once a second.
+
+## GNOME on Wayland is not supported
+
+GNOME offers no data-control protocol, so nothing outside the focused window
+can watch its Wayland clipboard. What remains is the X11 view through XWayland,
+and GNOME updates that only once after an X11 program last owned the clipboard:
+the first Wayland copy after an X11 copy is seen, and the copies after it are
+not, neither as a change nor in a read, which keeps returning the first one.
+x/clipboard reads through that same view on GNOME, so no watcher built on it
+can do better.
+
+`FallbackReason()` returns `ErrGNOMEWayland` there, so a program can detect it
+with `errors.Is` rather than trust a watcher that will miss copies. The
+clipboard that does work there is the desktop portal's
+(`org.freedesktop.portal.Clipboard`, within a RemoteDesktop session).
 
 ```go
 import "github.com/gurupras/clipwatch"
@@ -86,9 +105,11 @@ polling is all there is.
 
 Those tests copy from inside the test process. To check a copy made by another
 program, set `CLIPBOARD_ONDEVICE_COPY` to a command that copies its stdin:
-`xclip -selection clipboard` on X11, `clip` on Windows, `pbcopy` on macOS.
-GNOME on Wayland has no such command: `wl-copy` needs the data-control
-protocol, which GNOME lacks.
+`xclip -selection clipboard` on X11, `clip` on Windows, `pbcopy` on macOS,
+`wl-copy` on a data-control compositor. `scripts/gtk-copy.py` copies from a
+focused GTK4 window, the way a user's copy happens, for desktops where no
+command-line copier works (GNOME on Wayland, where it is how the limitation
+above was found).
 
 ## Status
 
@@ -96,18 +117,20 @@ protocol, which GNOME lacks.
 |---|---|
 | Windows | Event-driven, in pure Go through `user32` |
 | Linux (X11) | Event-driven, XFixes over the X11 wire protocol |
-| Linux (Wayland) | Defers to the underlying library's watch, even under XWayland: on GNOME an XFixes event is followed by a read that returns nothing. `Mechanism()` reports `library`, and `FallbackReason()` says why X11 was skipped. KDE and wlroots XWayland are untested |
+| Linux (Wayland, wlroots/KDE) | The underlying library's data-control watch; `Mechanism()` reports `library`. KDE is untested |
+| Linux (Wayland, GNOME) | Not supported: consecutive Wayland copies are not seen. `FallbackReason()` is `ErrGNOMEWayland` |
 | macOS | Polls `changeCount`, adaptively, because Apple offers nothing else |
 
-The on-device tests pass on these desktops, each in a VM:
+The on-device tests were run on these desktops, each in a VM:
 
 | Desktop | `Mechanism()` | This process's copy reported in | Another program's copy reported in |
 |---|---|---|---|
 | Windows 11 | `event` | 0–1 ms | 13 ms, mostly `clip` starting |
-| Linux, GNOME on Xorg | `event` | 0–3 ms | 3 ms (`xclip`) |
-| Linux, GNOME on Wayland | `library` | 800–850 ms | not testable: no command-line copier works on GNOME |
+| Linux, GNOME on Xorg | `event` | 0–3 ms | 3 ms (`xclip`); 155–161 ms (`gtk-copy.py`, mostly GTK starting) |
+| Linux, wlroots (headless sway) | `library` | 0–1 ms | 14–15 ms (`wl-copy`) |
+| Linux, GNOME on Wayland | `library` | 800–850 ms | **fails**: the first copy by a Wayland app is reported, the second never is |
 | macOS 15.7 (arm64) | `poll` | 800–850 ms idle; 53 ms after `Hint()`, with a 10 s idle interval | 800–850 ms (`pbcopy`) |
 
-KDE and wlroots sessions have not been tried.
+KDE has not been tried.
 
 MIT licensed, like the library it builds on.
