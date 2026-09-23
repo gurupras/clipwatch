@@ -93,7 +93,15 @@ polling is all there is.
 | Linux (Wayland) | Defers to the underlying library's watch, even under XWayland: on GNOME an XFixes event is followed by a read that returns nothing. `Mechanism()` reports `library`, and `FallbackReason()` says why X11 was skipped. KDE and wlroots XWayland are untested |
 | macOS | Polls `changeCount`, adaptively, because Apple offers nothing else |
 
-Verified by the unit tests everywhere; the on-device tests are how each backend
-is confirmed on a real desktop.
+The on-device tests pass on these desktops, each in a VM:
+
+| Desktop | `Mechanism()` | A copy reported in |
+|---|---|---|
+| Windows 11 | `event` | 0–2 ms |
+| Linux, GNOME on Xorg | `event` | 0–2 ms |
+| Linux, GNOME on Wayland | `library` | 800–850 ms |
+| macOS 15.7 (arm64) | `poll` | 800–850 ms idle; 54 ms after `Hint()`, with a 10 s idle interval |
+
+KDE and wlroots sessions have not been tried.
 
 MIT licensed, like the library it builds on.
