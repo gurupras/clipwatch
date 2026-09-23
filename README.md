@@ -101,12 +101,12 @@ protocol, which GNOME lacks.
 
 The on-device tests pass on these desktops, each in a VM:
 
-| Desktop | `Mechanism()` | A copy reported in |
-|---|---|---|
-| Windows 11 | `event` | 0–2 ms |
-| Linux, GNOME on Xorg | `event` | 0–2 ms |
-| Linux, GNOME on Wayland | `library` | 800–850 ms |
-| macOS 15.7 (arm64) | `poll` | 800–850 ms idle; 54 ms after `Hint()`, with a 10 s idle interval |
+| Desktop | `Mechanism()` | This process's copy reported in | Another program's copy reported in |
+|---|---|---|---|
+| Windows 11 | `event` | 0–1 ms | 13 ms, mostly `clip` starting |
+| Linux, GNOME on Xorg | `event` | 0–3 ms | 3 ms (`xclip`) |
+| Linux, GNOME on Wayland | `library` | 800–850 ms | not testable: no command-line copier works on GNOME |
+| macOS 15.7 (arm64) | `poll` | 800–850 ms idle; 53 ms after `Hint()`, with a 10 s idle interval | 800–850 ms (`pbcopy`) |
 
 KDE and wlroots sessions have not been tried.
 
