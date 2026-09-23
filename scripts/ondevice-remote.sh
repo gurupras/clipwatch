@@ -17,7 +17,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 target="${1:?usage: ondevice-remote.sh user@host [GOOS] [GOARCH]}"
 goos="${2:-linux}"
 goarch="${3:-amd64}"
-bin="clipboard.ondevice.test"
+bin="clipwatch.ondevice.test"
 [ "$goos" = windows ] && bin="$bin.exe"
 
 echo "== building $bin for $goos/$goarch"

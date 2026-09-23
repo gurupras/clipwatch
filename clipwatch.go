@@ -1,4 +1,4 @@
-// Package clipboard watches the system clipboard for changes and tells you the
+// Package clipwatch watches the system clipboard for changes and tells you the
 // moment one happens, instead of asking once a second whether anything has.
 //
 // Reading and writing are golang.design/x/clipboard's, unchanged: this package
@@ -22,7 +22,7 @@
 // Events carry no clipboard content. What was copied is read only when the
 // caller asks, through Read, so a program that only wants to know "something
 // changed" never touches the data. Nothing here logs.
-package clipboard
+package clipwatch
 
 import (
 	"context"
@@ -104,7 +104,7 @@ func (o Options) withDefaults() Options {
 }
 
 // ErrClosed is returned by Hint on a watcher whose context has ended.
-var ErrClosed = errors.New("clipboard: the watcher is closed")
+var ErrClosed = errors.New("clipwatch: the watcher is closed")
 
 // Init prepares the underlying clipboard library. It is not required — New
 // calls it — but a caller that wants to fail early, before any goroutine

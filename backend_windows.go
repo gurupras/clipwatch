@@ -1,4 +1,4 @@
-package clipboard
+package clipwatch
 
 import (
 	"context"
@@ -85,7 +85,7 @@ func windowsLoop(ctx context.Context, w *Watcher, ready chan<- error) {
 
 	var seq uint64
 	instance, _, _ := getModuleHandleW.Call(0)
-	className, err := syscall.UTF16PtrFromString("gurupras-clipboard-watcher")
+	className, err := syscall.UTF16PtrFromString("gurupras-clipwatch")
 	if err != nil {
 		ready <- err
 		return
@@ -110,19 +110,19 @@ func windowsLoop(ctx context.Context, w *Watcher, ready chan<- error) {
 	if atom, _, e := registerClassExW.Call(uintptr(unsafe.Pointer(&class))); atom == 0 {
 		const errClassAlreadyExists = 1410
 		if en, ok := e.(syscall.Errno); !ok || uintptr(en) != errClassAlreadyExists {
-			ready <- fmt.Errorf("clipboard: register window class: %w", e)
+			ready <- fmt.Errorf("clipwatch: register window class: %w", e)
 			return
 		}
 	}
 	hwnd, _, e := createWindowExW.Call(0, uintptr(unsafe.Pointer(className)), 0, 0,
 		cwUseDefault, cwUseDefault, 0, 0, hwndMessage, 0, instance, 0)
 	if hwnd == 0 {
-		ready <- fmt.Errorf("clipboard: create message window: %w", e)
+		ready <- fmt.Errorf("clipwatch: create message window: %w", e)
 		return
 	}
 	defer destroyWindow.Call(hwnd)
 	if ok, _, e := addClipboardListener.Call(hwnd); ok == 0 {
-		ready <- fmt.Errorf("clipboard: add clipboard format listener: %w", e)
+		ready <- fmt.Errorf("clipwatch: add clipboard format listener: %w", e)
 		return
 	}
 	defer removeClipboardListen.Call(hwnd)

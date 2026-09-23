@@ -1,6 +1,6 @@
 //go:build !windows && !linux
 
-package clipboard
+package clipwatch
 
 import "context"
 

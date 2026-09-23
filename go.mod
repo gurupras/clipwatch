@@ -1,4 +1,4 @@
-module github.com/gurupras/clipboard
+module github.com/gurupras/clipwatch
 
 go 1.24
 

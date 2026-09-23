@@ -1,6 +1,6 @@
 //go:build !windows && !darwin
 
-package clipboard
+package clipwatch
 
 // X11 and Wayland expose no clipboard change counter: the only way to notice a
 // change without an event is to ask the owner for the content and compare it.

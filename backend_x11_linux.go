@@ -1,4 +1,4 @@
-package clipboard
+package clipwatch
 
 import (
 	"bufio"
@@ -51,7 +51,7 @@ func dialX11() (*x11Watch, x11.Setup, error) {
 	}
 	conn, err := net.Dial(d.Net, d.Addr)
 	if err != nil {
-		return nil, x11.Setup{}, fmt.Errorf("clipboard: connect to the X server: %w", err)
+		return nil, x11.Setup{}, fmt.Errorf("clipwatch: connect to the X server: %w", err)
 	}
 	name, data := xauth(d.Num)
 	if _, err := conn.Write(x11.SetupRequest(name, data)); err != nil {
@@ -105,7 +105,7 @@ func (x *x11Watch) queryExtension(name string) (major, firstEvent byte, present 
 		return 0, 0, false, err
 	}
 	if p.IsError() {
-		return 0, 0, false, fmt.Errorf("clipboard: QueryExtension(%s) failed with error %d", name, p.ErrorCode())
+		return 0, 0, false, fmt.Errorf("clipwatch: QueryExtension(%s) failed with error %d", name, p.ErrorCode())
 	}
 	// reply: 8 = present, 9 = major opcode, 10 = first event, 11 = first error
 	return p.Raw[9], p.Raw[10], p.Raw[8] == 1, nil
@@ -128,7 +128,7 @@ func (x *x11Watch) queryVersion(major byte) error {
 		return err
 	}
 	if p.IsError() {
-		return fmt.Errorf("clipboard: XFixesQueryVersion failed with error %d", p.ErrorCode())
+		return fmt.Errorf("clipwatch: XFixesQueryVersion failed with error %d", p.ErrorCode())
 	}
 	return nil
 }
@@ -156,7 +156,7 @@ func (x *x11Watch) internAtom(name string) (uint32, error) {
 		return 0, err
 	}
 	if p.IsError() {
-		return 0, fmt.Errorf("clipboard: InternAtom(%s) failed with error %d", name, p.ErrorCode())
+		return 0, fmt.Errorf("clipwatch: InternAtom(%s) failed with error %d", name, p.ErrorCode())
 	}
 	return p.Atom(), nil
 }
@@ -185,7 +185,7 @@ func startX11(ctx context.Context, w *Watcher, _ Options) error {
 		return err
 	}
 	if !present {
-		return fmt.Errorf("clipboard: this X server has no XFIXES extension")
+		return fmt.Errorf("clipwatch: this X server has no XFIXES extension")
 	}
 	if err := x.queryVersion(major); err != nil {
 		return err

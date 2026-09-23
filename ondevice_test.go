@@ -1,4 +1,4 @@
-package clipboard
+package clipwatch
 
 import (
 	"context"

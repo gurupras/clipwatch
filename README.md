@@ -1,4 +1,4 @@
-# clipboard
+# clipwatch
 
 Watch the system clipboard and hear about a change when it happens, rather than
 a second later.
@@ -20,12 +20,14 @@ Where a backend cannot start, the watcher falls back to polling and says so
 through `Mechanism()`. It is never worse than the library it wraps.
 
 ```go
-w, err := clipboard.New(ctx, clipboard.Options{})
+import "github.com/gurupras/clipwatch"
+
+w, err := clipwatch.New(ctx, clipwatch.Options{})
 if err != nil {
 	return err
 }
 for range w.Events() {
-	text := clipboard.Read(clipboard.FmtText)
+	text := clipwatch.Read(clipwatch.FmtText)
 	_ = text
 }
 ```
