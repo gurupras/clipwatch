@@ -10,6 +10,13 @@ The parent returns once the copy is made. A detached child keeps serving the
 clipboard for SERVE_SECONDS, because on Wayland the content goes away when
 the program that copied it exits. Needs python3-gi and GTK 4's introspection
 data (gir1.2-gtk-4.0 on Debian and Ubuntu).
+
+GNOME gives the window focus only outside the Activities overview, and a VM
+resumed from a save comes back in it. Close it first:
+
+    gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell \
+        --method org.freedesktop.DBus.Properties.Set \
+        org.gnome.Shell OverviewActive "<false>"
 """
 import os
 import sys
@@ -22,9 +29,12 @@ def serve(text, ready_fd):
     import gi
     gi.require_version("Gtk", "4.0")
     gi.require_version("Gdk", "4.0")
-    from gi.repository import Gdk, GLib, Gtk
+    from gi.repository import Gdk, Gio, GLib, Gtk
 
-    app = Gtk.Application(application_id="dev.clipwatch.copier")
+    # NON_UNIQUE: each copy is its own instance. A single-instance app would
+    # hand the second invocation to the first, still serving, and never copy.
+    app = Gtk.Application(application_id="dev.clipwatch.copier",
+                          flags=Gio.ApplicationFlags.NON_UNIQUE)
 
     def on_activate(app):
         win = Gtk.ApplicationWindow(application=app, title="clipwatch copier")
