@@ -1,6 +1,7 @@
 package clipwatch
 
 import (
+	"runtime"
 	"sync"
 
 	"github.com/ebitengine/purego"
@@ -44,6 +45,14 @@ func changeCount() uint64 {
 	}
 	// generalPasteboard hands back an autoreleased object, and this runs on a
 	// timer: without a pool of its own, every poll would leak one.
+	//
+	// A pool belongs to the thread that created it and must be drained there,
+	// on top of that thread's pool stack. Each message send below is a
+	// separate call into C, and between them the scheduler may move this
+	// goroutine to another thread; draining there faults inside libobjc. So
+	// the thread is held for the life of the pool.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	var pool objc.ID
 	if classAutoreleasePool != 0 {
 		pool = objc.ID(classAutoreleasePool).Send(selAlloc).Send(selInit)
